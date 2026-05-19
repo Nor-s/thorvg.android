@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-package org.thorvg.view.lottie.gl
+package org.thorvg.core.lottie.gl
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -29,17 +29,27 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import androidx.annotation.RestrictTo
 import org.thorvg.core.lottie.LottieConstants
 import org.thorvg.core.lottie.LottieGlComposition
 import org.thorvg.core.lottie.LottieGlRenderState
 import org.thorvg.core.lottie.LottieRenderTarget
-import org.thorvg.view.lottie.LottieListener
 import java.util.concurrent.CountDownLatch
 import kotlin.math.min
 
-internal class GlRenderer(
-    private val listenerProvider: () -> LottieListener?,
-    private val renderFailureListener: () -> Unit
+/**
+ * Drives a Lottie GL render loop on the shared GL thread.
+ *
+ * The hosting view/composable wires the render surface, composition factory, and
+ * playback callbacks; this class handles EGL surface binding, frame pacing,
+ * repeat/end signaling, and target rebinding.
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+class GlRenderer(
+    private val onAnimationStart: () -> Unit = {},
+    private val onAnimationEnd: () -> Unit = {},
+    private val onAnimationRepeat: () -> Unit = {},
+    private val onRenderFailure: () -> Unit = {}
 ) : SharedGlThread.RenderClient {
     private val sharedGl = SharedGlThread.instance
     private val handler = sharedGl.handler
@@ -301,7 +311,7 @@ internal class GlRenderer(
         }
         if (!started) {
             started = true
-            mainHandler.post { listenerProvider()?.onAnimationStart() }
+            mainHandler.post { onAnimationStart() }
         }
 
         // Preserve leftover fractional frame time to avoid playback drift.
@@ -320,7 +330,7 @@ internal class GlRenderer(
             if (!ended) {
                 ended = true
                 isRunning = false
-                mainHandler.post { listenerProvider()?.onAnimationEnd() }
+                mainHandler.post { onAnimationEnd() }
             }
             return
         }
@@ -347,7 +357,7 @@ internal class GlRenderer(
 
         if (resets > 0) {
             repeated += resets
-            mainHandler.post { listenerProvider()?.onAnimationRepeat() }
+            mainHandler.post { onAnimationRepeat() }
         }
     }
 
@@ -389,7 +399,7 @@ internal class GlRenderer(
         isRunning = false
         dirtyFrame = false
         sharedGl.unregisterOnGlThread(this)
-        mainHandler.post { renderFailureListener() }
+        mainHandler.post { onRenderFailure() }
     }
 
     private fun post(action: () -> Unit) {

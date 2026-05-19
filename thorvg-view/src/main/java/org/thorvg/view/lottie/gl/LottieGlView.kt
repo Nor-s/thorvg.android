@@ -32,6 +32,7 @@ import androidx.annotation.FloatRange
 import androidx.annotation.RawRes
 import org.thorvg.core.lottie.LottieGlComposition
 import org.thorvg.core.lottie.LottieGlRenderState
+import org.thorvg.core.lottie.gl.GlRenderer
 import org.thorvg.view.R
 import org.thorvg.view.lottie.LottieListener
 import org.thorvg.view.lottie.LottieRenderView
@@ -239,8 +240,10 @@ internal class LottieGlView @JvmOverloads constructor(
 
     private fun ensureRenderer(): GlRenderer {
         return renderer ?: GlRenderer(
-            listenerProvider = { listener },
-            renderFailureListener = { renderFailureListener?.invoke() }
+            onAnimationStart = { listener?.onAnimationStart() },
+            onAnimationEnd = { listener?.onAnimationEnd() },
+            onAnimationRepeat = { listener?.onAnimationRepeat() },
+            onRenderFailure = { renderFailureListener?.invoke() }
         ).also { renderer = it }
     }
 

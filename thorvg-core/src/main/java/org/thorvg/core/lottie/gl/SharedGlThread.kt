@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-package org.thorvg.view.lottie.gl
+package org.thorvg.core.lottie.gl
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
@@ -32,6 +32,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Choreographer
+import androidx.annotation.RestrictTo
 
 /**
  * Singleton shared GL thread that owns a single EGL context.
@@ -41,7 +42,8 @@ import android.view.Choreographer
  * Reference:
  * https://github.com/LottieFiles/dotlottie-android/blob/0.13.7/dotlottie/src/main/java/com/lottiefiles/dotlottie/core/util/SharedGlThread.kt
  */
-internal class SharedGlThread private constructor() {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+class SharedGlThread private constructor() {
     private val thread = HandlerThread("ThorVG-Lottie-SharedGL").also { it.start() }
     val handler = Handler(thread.looper)
 
@@ -55,7 +57,7 @@ internal class SharedGlThread private constructor() {
     private val clients = mutableListOf<RenderClient>()
     private var choreographer: Choreographer? = null
     private var choreographerRunning = false
-    
+
     /** Tracks which client last rendered, so clients can skip redundant setGlTarget calls. */
     var lastRenderedClient: RenderClient? = null
         private set

@@ -20,10 +20,11 @@
  * SOFTWARE.
  */
 
-package org.thorvg.view.lottie.gl
+package org.thorvg.core.lottie.gl
 
 import android.opengl.GLES20
 import android.opengl.GLES30
+import androidx.annotation.RestrictTo
 
 /**
  * Owns a single offscreen FBO + color texture pair used as an intermediate
@@ -39,7 +40,8 @@ import android.opengl.GLES30
  * Reference:
  * https://github.com/LottieFiles/dotlottie-android/blob/0.13.7/dotlottie/src/main/java/com/lottiefiles/dotlottie/core/widget/DotLottieGLAnimation.kt
  */
-internal class GlRenderTarget {
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+class GlRenderTarget {
     var framebufferId = 0
         private set
 
