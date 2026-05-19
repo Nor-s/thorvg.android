@@ -187,7 +187,16 @@ class GlRenderer(
     }
 
     fun stop() {
-        pause();
+        post {
+            isRunning = false
+            started = false
+            ended = false
+            repeated = 0
+            currentFrame = renderState.firstFrame
+            dirtyFrame = true
+            lastDrawTimeMs = 0L
+            sharedGl.requestRender()
+        }
     }
 
     fun pause() {
