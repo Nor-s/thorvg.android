@@ -30,5 +30,12 @@ enum class LottieRenderer {
     Sw,
 
     /** GPU renderer hosted in a TextureView. */
-    Gl
+    Gl,
+
+    /**
+     * Prefer the GPU renderer and fall back to the software renderer if GL
+     * reports a render failure (e.g. unavailable EGL context, surface bind
+     * failure, draw failure).
+     */
+    Automatic
 }

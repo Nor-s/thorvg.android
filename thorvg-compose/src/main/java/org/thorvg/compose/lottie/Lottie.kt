@@ -171,7 +171,9 @@ fun rememberLottieComposition(@RawRes resId: Int): LottieSwComposition {
  * Renders a ThorVG Lottie animation from a raw resource in Compose.
  *
  * Use [renderer] to pick between the software bitmap renderer
- * ([LottieRenderer.Sw], default) and the GPU renderer ([LottieRenderer.Gl]).
+ * ([LottieRenderer.Sw], default), the GPU renderer ([LottieRenderer.Gl]),
+ * or [LottieRenderer.Automatic] which prefers GL and falls back to SW on
+ * render failure.
  */
 @Composable
 fun Lottie(
@@ -185,7 +187,18 @@ fun Lottie(
     onAnimationRepeat: (() -> Unit)? = null,
     onAnimationEnd: (() -> Unit)? = null
 ) {
-    when (renderer) {
+    // Set to true when GL fails. Compose then switches to the SW path on the
+    // next frame and cleans up the GL renderer and TextureView for us.
+    var glRenderFailed by remember(renderer) { mutableStateOf(false) }
+
+    val effective = when (renderer) {
+        LottieRenderer.Sw -> LottieRenderer.Sw
+        LottieRenderer.Gl -> LottieRenderer.Gl
+        LottieRenderer.Automatic ->
+            if (glRenderFailed) LottieRenderer.Sw else LottieRenderer.Gl
+    }
+
+    when (effective) {
         LottieRenderer.Sw -> {
             val composition = rememberLottieComposition(resId)
             Lottie(
@@ -208,8 +221,13 @@ fun Lottie(
             lastFrame = lastFrame,
             onAnimationStart = onAnimationStart,
             onAnimationRepeat = onAnimationRepeat,
-            onAnimationEnd = onAnimationEnd
+            onAnimationEnd = onAnimationEnd,
+            onRenderFailure = if (renderer == LottieRenderer.Automatic) {
+                { glRenderFailed = true }
+            } else null
         )
+
+        LottieRenderer.Automatic -> Unit
     }
 }
 

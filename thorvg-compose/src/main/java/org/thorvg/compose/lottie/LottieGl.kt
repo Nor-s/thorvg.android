@@ -56,7 +56,8 @@ internal fun LottieGlAnimation(
     lastFrame: Int?,
     onAnimationStart: (() -> Unit)?,
     onAnimationRepeat: (() -> Unit)?,
-    onAnimationEnd: (() -> Unit)?
+    onAnimationEnd: (() -> Unit)?,
+    onRenderFailure: (() -> Unit)? = null
 ) {
     val resources = LocalContext.current.resources
 
@@ -64,7 +65,8 @@ internal fun LottieGlAnimation(
         GlRenderer(
             onAnimationStart = { onAnimationStart?.invoke() },
             onAnimationEnd = { onAnimationEnd?.invoke() },
-            onAnimationRepeat = { onAnimationRepeat?.invoke() }
+            onAnimationRepeat = { onAnimationRepeat?.invoke() },
+            onRenderFailure = { onRenderFailure?.invoke() }
         )
     }
 
