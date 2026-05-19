@@ -65,14 +65,13 @@ Java_org_thorvg_core_lottie_LottieNativeBindings_nCreateGlLottie(JNIEnv *env, jc
 
 extern "C" void
 Java_org_thorvg_core_lottie_LottieNativeBindings_nDestroyLottie(JNIEnv* env, jclass clazz, jlong lottie_ptr) {
-    tvg::Initializer::term();
-
     if (lottie_ptr == 0) {
         return;
     }
 
     auto* data = reinterpret_cast<LottieDrawable::Data*>(lottie_ptr);
     delete data;
+    tvg::Initializer::term();
 }
 
 extern "C" void
