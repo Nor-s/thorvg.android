@@ -159,6 +159,9 @@ class LottieGlComposition(jsonContent: String) :
 
     private var width = 0
     private var height = 0
+    private var boundTarget: LottieRenderTarget.Gl? = null
+    private var boundWidth = 0
+    private var boundHeight = 0
 
     /**
      * Records the output dimensions. The native binding is applied by the next [target] call.
@@ -177,7 +180,12 @@ class LottieGlComposition(jsonContent: String) :
     fun target(target: LottieRenderTarget.Gl): Boolean {
         if (!isValid()) return false
         if (width <= 0 || height <= 0) return false
-        return LottieNativeBindings.nResizeGlLottie(
+
+        if (boundTarget == target && boundWidth == width && boundHeight == height) {
+            return true
+        }
+
+        val resized = LottieNativeBindings.nResizeGlLottie(
             nativePtr,
             target.display,
             target.surface,
@@ -186,6 +194,12 @@ class LottieGlComposition(jsonContent: String) :
             width.toFloat(),
             height.toFloat()
         )
+        if (resized) {
+            boundTarget = target
+            boundWidth = width
+            boundHeight = height
+        }
+        return resized
     }
 
     /**
@@ -200,6 +214,9 @@ class LottieGlComposition(jsonContent: String) :
     override fun release() {
         width = 0
         height = 0
+        boundTarget = null
+        boundWidth = 0
+        boundHeight = 0
         super.release()
     }
 
