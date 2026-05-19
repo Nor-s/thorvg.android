@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -56,15 +57,21 @@ internal fun LottieGlAnimation(
     lastFrame: Int?,
     onAnimationStart: (() -> Unit)?,
     onAnimationRepeat: (() -> Unit)?,
-    onAnimationEnd: (() -> Unit)?
+    onAnimationEnd: (() -> Unit)?,
+    onRenderFailure: (() -> Unit)? = null
 ) {
     val resources = LocalContext.current.resources
+    val currentOnAnimationStart by rememberUpdatedState(onAnimationStart)
+    val currentOnAnimationEnd by rememberUpdatedState(onAnimationEnd)
+    val currentOnAnimationRepeat by rememberUpdatedState(onAnimationRepeat)
+    val currentOnRenderFailure by rememberUpdatedState(onRenderFailure)
 
     val renderer = remember {
         GlRenderer(
-            onAnimationStart = { onAnimationStart?.invoke() },
-            onAnimationEnd = { onAnimationEnd?.invoke() },
-            onAnimationRepeat = { onAnimationRepeat?.invoke() }
+            onAnimationStart = { currentOnAnimationStart?.invoke() },
+            onAnimationEnd = { currentOnAnimationEnd?.invoke() },
+            onAnimationRepeat = { currentOnAnimationRepeat?.invoke() },
+            onRenderFailure = { currentOnRenderFailure?.invoke() }
         )
     }
 
