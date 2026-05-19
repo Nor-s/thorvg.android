@@ -228,7 +228,7 @@ fun Lottie(
     onAnimationEnd: (() -> Unit)? = null
 ) {
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    var currentBitmap by remember(composition) { mutableStateOf<Bitmap?>(null) }
+    var currentBitmap by remember(composition) { mutableStateOf<Bitmap?>(null, neverEqualPolicy()) }
     var consumedResetRequest by remember(composition) { mutableIntStateOf(state.resetRequests) }
 
     LaunchedEffect(
