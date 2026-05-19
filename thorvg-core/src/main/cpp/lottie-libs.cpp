@@ -44,7 +44,7 @@ static jlong createLottie(JNIEnv *env, jstring content, jint length, jintArray o
     jint* contentInfo = env->GetIntArrayElements(out_values, nullptr);
     if (contentInfo != nullptr) {
         contentInfo[0] = (jint) newData->mAnimation->totalFrame();
-        contentInfo[1] = (jint) newData->mAnimation->duration();
+        contentInfo[1] = (jint) (newData->mAnimation->duration() * 1000.0f);
         env->ReleaseIntArrayElements(out_values, contentInfo, 0);
     }
 

@@ -58,7 +58,7 @@ sealed class LottieComposition protected constructor(
         val outValues = IntArray(LOTTIE_INFO_COUNT)
         nativePtr = nativeCreator(jsonContent, jsonContent.length, outValues)
         frameCount = outValues[LOTTIE_INFO_FRAME_COUNT]
-        duration = outValues[LOTTIE_INFO_DURATION] * 1000L
+        duration = outValues[LOTTIE_INFO_DURATION].toLong()
     }
 
     /**
