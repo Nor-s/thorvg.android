@@ -40,7 +40,7 @@ import java.io.InputStreamReader
  */
 sealed class LottieComposition protected constructor(
     protected val jsonContent: String,
-    nativeCreator: (String, Int, IntArray) -> Long
+    nativeCreator: (String, IntArray) -> Long
 ) {
     protected val nativePtr: Long
 
@@ -56,7 +56,7 @@ sealed class LottieComposition protected constructor(
 
     init {
         val outValues = IntArray(LOTTIE_INFO_COUNT)
-        nativePtr = nativeCreator(jsonContent, jsonContent.length, outValues)
+        nativePtr = nativeCreator(jsonContent, outValues)
         frameCount = outValues[LOTTIE_INFO_FRAME_COUNT]
         duration = outValues[LOTTIE_INFO_DURATION].toLong()
     }

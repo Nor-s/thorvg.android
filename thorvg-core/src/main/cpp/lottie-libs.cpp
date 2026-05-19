@@ -28,7 +28,7 @@
 using namespace std;
 
 template <typename LottieData>
-static jlong createLottie(JNIEnv *env, jstring content, jint length, jintArray out_values) {
+static jlong createLottie(JNIEnv *env, jstring content, jintArray out_values) {
     if (content == nullptr) {
         return 0;
     }
@@ -38,7 +38,8 @@ static jlong createLottie(JNIEnv *env, jstring content, jint length, jintArray o
     }
 
     const char* inputStr = env->GetStringUTFChars(content, nullptr);
-    auto* newData = new LottieData(inputStr, length);
+    auto utfLength = static_cast<uint32_t>(env->GetStringUTFLength(content));
+    auto* newData = new LottieData(inputStr, utfLength);
     env->ReleaseStringUTFChars(content, inputStr);
 
     jint* contentInfo = env->GetIntArrayElements(out_values, nullptr);
@@ -53,14 +54,14 @@ static jlong createLottie(JNIEnv *env, jstring content, jint length, jintArray o
 
 extern "C" jlong
 Java_org_thorvg_core_lottie_LottieNativeBindings_nCreateSwLottie(JNIEnv *env, jclass clazz,
-        jstring content, jint length, jintArray out_values) {
-    return createLottie<LottieDrawable::SwData>(env, content, length, out_values);
+        jstring content, jintArray out_values) {
+    return createLottie<LottieDrawable::SwData>(env, content, out_values);
 }
 
 extern "C" jlong
 Java_org_thorvg_core_lottie_LottieNativeBindings_nCreateGlLottie(JNIEnv *env, jclass clazz,
-        jstring content, jint length, jintArray out_values) {
-    return createLottie<LottieDrawable::GlData>(env, content, length, out_values);
+        jstring content, jintArray out_values) {
+    return createLottie<LottieDrawable::GlData>(env, content, out_values);
 }
 
 extern "C" void

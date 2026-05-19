@@ -10,14 +10,12 @@ object LottieNativeBindings {
     @JvmStatic
     external fun nCreateSwLottie(
         content: String?,
-        length: Int,
         outValues: IntArray?
     ): Long
 
     @JvmStatic
     external fun nCreateGlLottie(
         content: String?,
-        length: Int,
         outValues: IntArray?
     ): Long
 

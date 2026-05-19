@@ -44,8 +44,6 @@ namespace LottieDrawable {
 
     protected:
         tvg::Canvas* mCanvas = nullptr;
-        const char* mContent;
-        uint32_t mContentLength;
     };
 
     class SwData final : public Data {
