@@ -307,10 +307,7 @@ sealed class LottieRenderState<C : LottieComposition> {
     }
 
     fun resolvedLastFrame(): Int {
-        val frameCount = (composition?.frameCount ?: firstFrame).coerceAtLeast(firstFrame)
-        return (if (lastFrame > 0) lastFrame else frameCount)
-            .coerceAtLeast(firstFrame)
-            .coerceAtMost(frameCount)
+        return resolveLastFrame(composition?.frameCount ?: 0, firstFrame, lastFrame)
     }
 
     fun copyPlaybackTo(target: LottieRenderState<*>) {
@@ -329,12 +326,27 @@ sealed class LottieRenderState<C : LottieComposition> {
 
     protected fun updateFrameInterval() {
         val currentComposition = composition
-        val totalFrames = resolvedLastFrame() - firstFrame
+        val totalFrames = inclusiveFrameCount(firstFrame, resolvedLastFrame())
         frameInterval = when {
             currentComposition == null -> 0L
             totalFrames <= 0 -> 0L
             speed <= 0f -> 0L
             else -> (currentComposition.duration / totalFrames / speed).toLong()
+        }
+    }
+
+    internal companion object {
+        fun resolveLastFrame(frameCount: Int, firstFrame: Int, lastFrame: Int): Int {
+            if (frameCount <= 0) return firstFrame
+            val maxFrame = frameCount - 1
+            if (maxFrame < firstFrame) return firstFrame
+            return (if (lastFrame > 0) lastFrame else maxFrame)
+                .coerceAtLeast(firstFrame)
+                .coerceAtMost(maxFrame)
+        }
+
+        fun inclusiveFrameCount(firstFrame: Int, lastFrame: Int): Int {
+            return lastFrame - firstFrame + 1
         }
     }
 }

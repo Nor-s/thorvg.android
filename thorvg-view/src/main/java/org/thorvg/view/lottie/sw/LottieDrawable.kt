@@ -100,13 +100,14 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
                     dispatchAnimationEnd()
                 }
             } else {
+                val lastFrame = lottieState.resolvedLastFrame
                 var resetFrame = false
                 frame += lottieState.framesPerUpdate
-                if (frame > lottieState.lastFrame) {
+                if (frame > lastFrame) {
                     frame = lottieState.firstFrame
                     resetFrame = true
                 } else if (frame < lottieState.firstFrame) {
-                    frame = lottieState.lastFrame
+                    frame = lastFrame
                     resetFrame = true
                 }
                 if (resetFrame) {
@@ -447,7 +448,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
             val drawable = LottieDrawable()
             drawable.lottieState.composition = LottieSwComposition.fromRawResource(resources, resId)
             drawable.lottieState.composition?.let { composition ->
-                drawable.setLastFrame(composition.frameCount)
+                drawable.setLastFrame(composition.frameCount - 1)
             }
             return drawable
         }
