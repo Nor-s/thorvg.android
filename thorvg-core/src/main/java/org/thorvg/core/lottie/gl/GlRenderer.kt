@@ -274,30 +274,47 @@ class GlRenderer(
         if (!surfaceReady || width <= 0 || height <= 0) return false
         if (renderState.composition == null) return false
 
-        // Keep one timing value for draw throttling and frame catch-up.
+        val timing = currentFrameTiming()
+        if (!timing.shouldDraw) return false
+        if (!prepareFrameTarget()) return false
+        if (!renderCurrentFrame()) return false
+
+        finishFrame(timing)
+        return true
+    }
+
+    private fun currentFrameTiming(): FrameTiming {
         val nowMs = SystemClock.uptimeMillis()
         val interval = renderState.frameInterval
         val elapsedMs = if (lastDrawTimeMs > 0L) nowMs - lastDrawTimeMs else interval
         val steps = if (interval > 0L && elapsedMs >= interval) (elapsedMs / interval).toInt() else 0
-        val shouldDraw = dirtyFrame || (isRunning && steps > 0)
+        return FrameTiming(
+            nowMs = nowMs,
+            interval = interval,
+            steps = steps,
+            shouldDraw = dirtyFrame || (isRunning && steps > 0)
+        )
+    }
 
-        // Skip unless we have a forced redraw or there's a frame to advance.
-        if (!shouldDraw) return false
-
+    private fun prepareFrameTarget(): Boolean {
         if (!sharedGl.makeCurrent(eglSurface)) {
             notifyRenderFailure()
             return false
         }
-        if (targetDirty ||
+        if (!needsTargetBind()) return true
+        if (bindTarget(ensureCurrent = false)) return true
+
+        notifyRenderFailure()
+        return false
+    }
+
+    private fun needsTargetBind(): Boolean {
+        return targetDirty ||
             renderTarget.framebufferId == 0 ||
             sharedGl.lastRenderedClient != this
-        ) {
-            if (!bindTarget(ensureCurrent = false)) {
-                notifyRenderFailure()
-                return false
-            }
-        }
+    }
 
+    private fun renderCurrentFrame(): Boolean {
         renderTarget.bind()
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClearColor(0f, 0f, 0f, 0f)
@@ -311,12 +328,15 @@ class GlRenderer(
             notifyRenderFailure()
             return false
         }
+        return true
+    }
 
+    private fun finishFrame(timing: FrameTiming) {
         dirtyFrame = false
 
         if (!isRunning) {
-            lastDrawTimeMs = nowMs
-            return true
+            lastDrawTimeMs = timing.nowMs
+            return
         }
         if (!started) {
             started = true
@@ -324,13 +344,12 @@ class GlRenderer(
         }
 
         // Preserve leftover fractional frame time to avoid playback drift.
-        lastDrawTimeMs = if (lastDrawTimeMs > 0L && steps > 0) {
-            lastDrawTimeMs + steps * interval
+        lastDrawTimeMs = if (lastDrawTimeMs > 0L && timing.steps > 0) {
+            lastDrawTimeMs + timing.steps * timing.interval
         } else {
-            nowMs
+            timing.nowMs
         }
-        advanceFrame(steps)
-        return true
+        advanceFrame(timing.steps)
     }
 
     private fun advanceFrame(steps: Int) {
@@ -378,6 +397,13 @@ class GlRenderer(
     private fun lastFrame(): Int {
         return renderState.resolvedLastFrame()
     }
+
+    private data class FrameTiming(
+        val nowMs: Long,
+        val interval: Long,
+        val steps: Int,
+        val shouldDraw: Boolean
+    )
 
     private fun clearSurfaceOnGlThread(releaseComposition: Boolean) {
         sharedGl.unregisterOnGlThread(this)

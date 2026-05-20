@@ -51,6 +51,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.Constraints
 import androidx.fragment.app.Fragment
@@ -633,82 +638,190 @@ class LottiePlaybackProfilerFragment : Fragment() {
     ) {
         Layout(
             modifier = Modifier.fillMaxSize(),
-            content = {
-                resIds.forEachIndexed { index, resId ->
-                    val state = rememberLottieState(
-                        isPlaying = true,
-                        repeatCount = LottieConstants.INFINITE
-                    )
-                    Lottie(
-                        resId = resId,
-                        state = state,
-                        renderer = renderer
-                    )
-                    @Suppress("UNUSED_EXPRESSION") index
-                }
-            }
-        ) { measurables, constraints ->
-            val width = constraints.maxWidth
-            val height = constraints.maxHeight
-            val count = measurables.size
-            if (count == 0 || width <= 0 || height <= 0) {
-                return@Layout layout(width, height) {}
-            }
+            content = { ProfilerComposeItems(resIds, renderer) },
+            measurePolicy = profilerGridMeasurePolicy(
+                aspectRatios = aspectRatios,
+                sizeMode = sizeMode,
+                fixedWidth = fixedWidth,
+                fixedHeight = fixedHeight
+            )
+        )
+    }
 
-            val rows = ceil(sqrt(count.toDouble())).toInt().coerceAtLeast(1)
-            data class PlacedChild(val placeable: androidx.compose.ui.layout.Placeable, val x: Int, val y: Int)
-            val placed = ArrayList<PlacedChild>(count)
-
-            var childIndex = 0
-            var childTop = 0
-            for (row in 0 until rows) {
-                val base = count / rows
-                val extra = count % rows
-                val itemsInRow = base + if (row < extra) 1 else 0
-                val childBottom = if (row == rows - 1) height else height * (row + 1) / rows
-                var childLeft = 0
-                for (column in 0 until itemsInRow) {
-                    val childRight = if (column == itemsInRow - 1) {
-                        width
-                    } else {
-                        width * (column + 1) / itemsInRow
-                    }
-                    val availableW = childRight - childLeft
-                    val availableH = childBottom - childTop
-                    val maxW = if (sizeMode == SizeMode.Fill) availableW else fixedWidth
-                    val maxH = if (sizeMode == SizeMode.Fill) availableH else fixedHeight
-                    val ratio = aspectRatios.getOrElse(childIndex) { 1f }
-                        .takeIf { it > 0f } ?: 1f
-                    val byWidthHeight = (maxW / ratio).toInt()
-                    val childW: Int
-                    val childH: Int
-                    if (byWidthHeight <= maxH) {
-                        childW = maxW
-                        childH = byWidthHeight
-                    } else {
-                        childW = (maxH * ratio).toInt()
-                        childH = maxH
-                    }
-                    val placeable = measurables[childIndex].measure(
-                        Constraints.fixed(
-                            childW.coerceAtLeast(1),
-                            childH.coerceAtLeast(1)
-                        )
-                    )
-                    val px = childLeft + (availableW - childW) / 2
-                    val py = childTop + (availableH - childH) / 2
-                    placed += PlacedChild(placeable, px, py)
-                    childLeft = childRight
-                    childIndex++
-                }
-                childTop = childBottom
-            }
-
-            layout(width, height) {
-                placed.forEach { it.placeable.place(it.x, it.y) }
-            }
+    @Composable
+    private fun ProfilerComposeItems(
+        resIds: List<Int>,
+        renderer: LottieRenderer
+    ) {
+        resIds.forEach { resId ->
+            val state = rememberLottieState(
+                isPlaying = true,
+                repeatCount = LottieConstants.INFINITE
+            )
+            Lottie(
+                resId = resId,
+                state = state,
+                renderer = renderer
+            )
         }
     }
+
+    private fun profilerGridMeasurePolicy(
+        aspectRatios: List<Float>,
+        sizeMode: SizeMode,
+        fixedWidth: Int,
+        fixedHeight: Int
+    ): MeasurePolicy {
+        return MeasurePolicy { measurables, constraints ->
+            measureProfilerGrid(
+                measurables = measurables,
+                constraints = constraints,
+                aspectRatios = aspectRatios,
+                sizeMode = sizeMode,
+                fixedWidth = fixedWidth,
+                fixedHeight = fixedHeight
+            )
+        }
+    }
+
+    private fun MeasureScope.measureProfilerGrid(
+        measurables: List<Measurable>,
+        constraints: Constraints,
+        aspectRatios: List<Float>,
+        sizeMode: SizeMode,
+        fixedWidth: Int,
+        fixedHeight: Int
+    ): MeasureResult {
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        val count = measurables.size
+        if (count == 0 || width <= 0 || height <= 0) {
+            return layout(width, height) {}
+        }
+
+        val cells = composeGridCells(count, width, height)
+        val placed = measureComposeGridChildren(
+            measurables = measurables,
+            cells = cells,
+            aspectRatios = aspectRatios,
+            sizeMode = sizeMode,
+            fixedWidth = fixedWidth,
+            fixedHeight = fixedHeight
+        )
+        return layout(width, height) {
+            placed.forEach { it.placeable.place(it.x, it.y) }
+        }
+    }
+
+    private fun composeGridCells(count: Int, width: Int, height: Int): List<ComposeGridCell> {
+        val rows = ceil(sqrt(count.toDouble())).toInt().coerceAtLeast(1)
+        val cells = ArrayList<ComposeGridCell>(count)
+
+        var childTop = 0
+        for (row in 0 until rows) {
+            val itemsInRow = composeItemsInRow(count, rows, row)
+            val childBottom = composeRowBottom(row, rows, height)
+            var childLeft = 0
+            for (column in 0 until itemsInRow) {
+                val childRight = composeColumnRight(column, itemsInRow, width)
+                cells += ComposeGridCell(
+                    left = childLeft,
+                    top = childTop,
+                    right = childRight,
+                    bottom = childBottom
+                )
+                childLeft = childRight
+            }
+            childTop = childBottom
+        }
+
+        return cells
+    }
+
+    private fun measureComposeGridChildren(
+        measurables: List<Measurable>,
+        cells: List<ComposeGridCell>,
+        aspectRatios: List<Float>,
+        sizeMode: SizeMode,
+        fixedWidth: Int,
+        fixedHeight: Int
+    ): List<PlacedComposeChild> {
+        return measurables.mapIndexed { index, measurable ->
+            val cell = cells[index]
+            val childSize = composeChildSize(
+                cell = cell,
+                ratio = aspectRatios.getOrElse(index) { 1f }.takeIf { it > 0f } ?: 1f,
+                sizeMode = sizeMode,
+                fixedWidth = fixedWidth,
+                fixedHeight = fixedHeight
+            )
+            val placeable = measurable.measure(
+                Constraints.fixed(
+                    childSize.width.coerceAtLeast(1),
+                    childSize.height.coerceAtLeast(1)
+                )
+            )
+            PlacedComposeChild(
+                placeable = placeable,
+                x = cell.left + (cell.width - childSize.width) / 2,
+                y = cell.top + (cell.height - childSize.height) / 2
+            )
+        }
+    }
+
+    private fun composeChildSize(
+        cell: ComposeGridCell,
+        ratio: Float,
+        sizeMode: SizeMode,
+        fixedWidth: Int,
+        fixedHeight: Int
+    ): ComposeChildSize {
+        val maxWidth = if (sizeMode == SizeMode.Fill) cell.width else fixedWidth
+        val maxHeight = if (sizeMode == SizeMode.Fill) cell.height else fixedHeight
+        val byWidthHeight = (maxWidth / ratio).toInt()
+        return if (byWidthHeight <= maxHeight) {
+            ComposeChildSize(width = maxWidth, height = byWidthHeight)
+        } else {
+            ComposeChildSize(width = (maxHeight * ratio).toInt(), height = maxHeight)
+        }
+    }
+
+    private fun composeItemsInRow(count: Int, rows: Int, row: Int): Int {
+        val base = count / rows
+        val extra = count % rows
+        return base + if (row < extra) 1 else 0
+    }
+
+    private fun composeRowBottom(row: Int, rows: Int, height: Int): Int {
+        return if (row == rows - 1) height else height * (row + 1) / rows
+    }
+
+    private fun composeColumnRight(column: Int, columns: Int, width: Int): Int {
+        return if (column == columns - 1) width else width * (column + 1) / columns
+    }
+
+    private data class ComposeGridCell(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    ) {
+        val width: Int
+            get() = right - left
+        val height: Int
+            get() = bottom - top
+    }
+
+    private data class ComposeChildSize(
+        val width: Int,
+        val height: Int
+    )
+
+    private data class PlacedComposeChild(
+        val placeable: Placeable,
+        val x: Int,
+        val y: Int
+    )
 
     private data class RunConfig(
         val host: Host,
