@@ -22,10 +22,95 @@
 
 #include <android/bitmap.h>
 #include <thorvg.h>
+#include <cstdint>
+#include <cstdio>
+#include <dlfcn.h>
 #include <jni.h>
 #include "LottieData.h"
 
 using namespace std;
+
+namespace {
+
+using ATraceIsEnabled = bool (*)();
+using ATraceBeginSection = void (*)(const char*);
+using ATraceEndSection = void (*)();
+using ATraceSetCounter = void (*)(const char*, int64_t);
+
+struct ATraceApi {
+    ATraceIsEnabled isEnabled = nullptr;
+    ATraceBeginSection beginSection = nullptr;
+    ATraceEndSection endSection = nullptr;
+    ATraceSetCounter setCounter = nullptr;
+};
+
+const ATraceApi& atraceApi() {
+    static const ATraceApi api = []() {
+        ATraceApi resolved;
+        void* libandroid = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        if (libandroid == nullptr) {
+            return resolved;
+        }
+
+        resolved.isEnabled = reinterpret_cast<ATraceIsEnabled>(
+                dlsym(libandroid, "ATrace_isEnabled"));
+        resolved.beginSection = reinterpret_cast<ATraceBeginSection>(
+                dlsym(libandroid, "ATrace_beginSection"));
+        resolved.endSection = reinterpret_cast<ATraceEndSection>(
+                dlsym(libandroid, "ATrace_endSection"));
+        resolved.setCounter = reinterpret_cast<ATraceSetCounter>(
+                dlsym(libandroid, "ATrace_setCounter"));
+        return resolved;
+    }();
+    return api;
+}
+
+bool isATraceEnabled(const ATraceApi& api) {
+    return api.isEnabled != nullptr && api.isEnabled();
+}
+
+uint32_t traceViewId(jlong lottiePtr) {
+    return static_cast<uint32_t>(lottiePtr & 0xFFFF);
+}
+
+class LottieRasterTrace {
+public:
+    LottieRasterTrace(const char* backend, jlong lottiePtr, jint frame) {
+        const auto& api = atraceApi();
+        if (api.isEnabled == nullptr || api.beginSection == nullptr ||
+                api.endSection == nullptr || !isATraceEnabled(api)) {
+            return;
+        }
+
+        snprintf(sectionName, sizeof(sectionName), "thorvg.%sRaster#%x.f%d",
+                backend, traceViewId(lottiePtr), frame);
+        api.beginSection(sectionName);
+        active = true;
+    }
+
+    ~LottieRasterTrace() {
+        if (active) {
+            atraceApi().endSection();
+        }
+    }
+
+private:
+    bool active = false;
+    char sectionName[128] = {};
+};
+
+void setFrameCounter(const char* backend, jlong lottiePtr, jint frame) {
+    const auto& api = atraceApi();
+    if (api.setCounter == nullptr || !isATraceEnabled(api)) {
+        return;
+    }
+
+    char counterName[64];
+    snprintf(counterName, sizeof(counterName), "%sFrame#%x", backend, traceViewId(lottiePtr));
+    api.setCounter(counterName, frame);
+}
+
+} // namespace
 
 template <typename LottieData>
 static jlong createLottie(JNIEnv *env, jstring content, jintArray out_values) {
@@ -119,7 +204,11 @@ Java_org_thorvg_core_lottie_LottieNativeBindings_nDrawSwLottieFrame(JNIEnv* env,
     auto* data = reinterpret_cast<LottieDrawable::Data*>(lottie_ptr);
     void *buffer;
     if (AndroidBitmap_lockPixels(env, bitmap, &buffer) >= 0) {
-        data->draw(frame);
+        {
+            LottieRasterTrace trace("sw", lottie_ptr, frame);
+            data->draw(frame);
+            setFrameCounter("sw", lottie_ptr, frame);
+        }
         AndroidBitmap_unlockPixels(env, bitmap);
     }
 }
@@ -132,5 +221,9 @@ Java_org_thorvg_core_lottie_LottieNativeBindings_nDrawGlLottieFrame(JNIEnv* env,
     }
 
     auto* data = reinterpret_cast<LottieDrawable::Data*>(lottie_ptr);
-    data->draw(frame);
+    {
+        LottieRasterTrace trace("gl", lottie_ptr, frame);
+        data->draw(frame);
+        setFrameCounter("gl", lottie_ptr, frame);
+    }
 }
