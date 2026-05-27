@@ -40,7 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
@@ -351,7 +352,13 @@ fun Lottie(
         modifier = modifier.onSizeChanged { canvasSize = it }
     ) {
         currentBitmap?.let { bitmap ->
-            drawImage(bitmap.asImageBitmap(), topLeft = Offset.Zero)
+            // Bypass Compose's ImageBitmap texture cache — the underlying Bitmap
+            // is reused each frame and its contents change in-place, so a cached
+            // texture would show stale pixels. nativeCanvas.drawBitmap honors the
+            // bitmap's generationId bumped by AndroidBitmap_unlockPixels.
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawBitmap(bitmap, 0f, 0f, null)
+            }
         }
     }
 }
