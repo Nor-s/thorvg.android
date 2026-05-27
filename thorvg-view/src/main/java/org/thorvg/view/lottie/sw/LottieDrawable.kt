@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-package org.thorvg.view.lottie
+package org.thorvg.view.lottie.sw
 
 import android.content.res.Resources
 import android.graphics.Bitmap
@@ -34,11 +34,12 @@ import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RawRes
 import androidx.annotation.FloatRange
-import org.thorvg.core.lottie.LottieComposition
 import org.thorvg.core.lottie.LottieConstants
-import org.thorvg.core.lottie.LottieRenderState
+import org.thorvg.core.lottie.LottieSwComposition
+import org.thorvg.core.lottie.LottieSwRenderState
 import org.thorvg.core.lottie.LottieRepeatMode
 import org.thorvg.view.ThorVGDrawable
+import org.thorvg.view.lottie.LottieListener
 
 /**
  * Drawable adapter that renders a ThorVG Lottie composition into an Android [Canvas].
@@ -300,9 +301,9 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
     }
 
     internal class LottieDrawableState() : ConstantState() {
-        private val renderState = LottieRenderState()
+        private val renderState = LottieSwRenderState()
 
-        var composition: LottieComposition?
+        var composition: LottieSwComposition?
             get() = renderState.composition
             set(value) {
                 renderState.composition = value
@@ -380,6 +381,9 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
                 renderState.frameInterval = value
             }
 
+        val resolvedLastFrame: Int
+            get() = renderState.resolvedLastFrame()
+
         constructor(copy: LottieDrawableState?) : this() {
             copy ?: return
             composition = copy.composition?.copy()
@@ -398,7 +402,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
         }
 
         fun releaseComposition() {
-            renderState.releaseComposition()
+            renderState.release()
         }
 
         fun valid(): Boolean {
@@ -406,7 +410,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
         }
 
         fun setCompositionSize(width: Int, height: Int) {
-            renderState.setCompositionSize(width, height)
+            renderState.setSize(width, height)
         }
 
         fun renderFrame(frame: Int): Bitmap? {
@@ -441,7 +445,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
         @JvmStatic
         fun fromRawResource(resources: Resources, @RawRes resId: Int): LottieDrawable {
             val drawable = LottieDrawable()
-            drawable.lottieState.composition = LottieComposition.fromRawResource(resources, resId)
+            drawable.lottieState.composition = LottieSwComposition.fromRawResource(resources, resId)
             drawable.lottieState.composition?.let { composition ->
                 drawable.setLastFrame(composition.frameCount)
             }
