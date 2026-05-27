@@ -38,8 +38,8 @@ LottieDrawable::Data::~Data() {
     delete(mCanvas);
 }
 
-void LottieDrawable::Data::draw(uint32_t frame) {
-//    LOGI("LottieDrawable::Data::draw mAnimation=%d", mAnimation->curFrame());
+void LottieDrawable::Data::draw(float frame) {
+//    LOGI("LottieDrawable::Data::draw mAnimation=%f", mAnimation->curFrame());
     mAnimation->frame(frame);
     mCanvas->update();
     mCanvas->draw(true);

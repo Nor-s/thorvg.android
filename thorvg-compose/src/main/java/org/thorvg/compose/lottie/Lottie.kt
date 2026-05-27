@@ -37,13 +37,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.thorvg.core.lottie.LottieConstants
 import org.thorvg.core.lottie.LottieSwComposition
@@ -285,30 +285,37 @@ fun Lottie(
         consumedResetRequest = state.resetRequests
 
         val resolvedLastFrame = renderState.resolvedLastFrame()
+        val cycleSize = (resolvedLastFrame - renderState.firstFrame + 1).coerceAtLeast(1)
         var frame = if (shouldReset) {
             renderState.firstFrame
         } else {
             state.currentFrame.coerceIn(renderState.firstFrame, resolvedLastFrame)
         }
+        var anchorMs = 0L
 
         state.isRunning = state.isPlaying
 
         while (isActive) {
-            currentBitmap = renderState.renderFrame(frame)
+            val frameTimeMs = withFrameMillis { it }
+            if (anchorMs == 0L) anchorMs = frameTimeMs
+
+            val interval = renderState.frameInterval
+            val direction = renderState.framesPerUpdate
+            val elapsed = (frameTimeMs - anchorMs).coerceAtLeast(0L)
+            val fractionalFrames = if (interval > 0L) elapsed.toFloat() / interval else 0f
+            val actualFrame = frame.toFloat() + fractionalFrames * direction
+
+            currentBitmap = renderState.renderFrame(actualFrame)
             state.currentFrame = frame
 
-            if (!state.isPlaying) {
-                break
-            }
+            if (!state.isPlaying) break
 
             if (!started) {
                 started = true
                 onAnimationStart?.invoke()
             }
 
-            if (renderState.speed <= 0f) {
-                break
-            }
+            if (renderState.speed <= 0f) break
 
             val isFiniteEnd =
                 renderState.repeatCount != LottieConstants.INFINITE &&
@@ -319,24 +326,22 @@ fun Lottie(
                 break
             }
 
-            delay(renderState.frameInterval.coerceAtLeast(0L))
-
-            var nextFrame = frame + renderState.framesPerUpdate
-            var resetFrame = false
-            if (nextFrame > resolvedLastFrame) {
-                nextFrame = renderState.firstFrame
-                resetFrame = true
-            } else if (nextFrame < renderState.firstFrame) {
-                nextFrame = resolvedLastFrame
-                resetFrame = true
+            // Advance integer frame only when whole intervals have elapsed.
+            val steps = if (interval > 0L) (elapsed / interval).toInt() else 0
+            if (steps > 0) {
+                anchorMs += steps * interval
+                val offset = if (direction > 0) frame - renderState.firstFrame
+                             else resolvedLastFrame - frame
+                val advanced = offset.toLong() + steps.toLong()
+                val wraps = (advanced / cycleSize).toInt()
+                val nextOffset = (advanced % cycleSize).toInt()
+                frame = if (direction > 0) renderState.firstFrame + nextOffset
+                        else resolvedLastFrame - nextOffset
+                if (wraps > 0) {
+                    repeated += wraps
+                    onAnimationRepeat?.invoke()
+                }
             }
-
-            if (resetFrame) {
-                repeated++
-                onAnimationRepeat?.invoke()
-            }
-
-            frame = nextFrame
         }
 
         state.isRunning = false

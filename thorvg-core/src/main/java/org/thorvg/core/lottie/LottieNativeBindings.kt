@@ -39,10 +39,10 @@ object LottieNativeBindings {
     ): Boolean
 
     @JvmStatic
-    external fun nDrawSwLottieFrame(lottiePtr: Long, bitmap: Bitmap, frame: Int)
+    external fun nDrawSwLottieFrame(lottiePtr: Long, bitmap: Bitmap, frame: Float)
 
     @JvmStatic
-    external fun nDrawGlLottieFrame(lottiePtr: Long, frame: Int)
+    external fun nDrawGlLottieFrame(lottiePtr: Long, frame: Float)
 
     @JvmStatic
     external fun nDestroyLottie(lottiePtr: Long)

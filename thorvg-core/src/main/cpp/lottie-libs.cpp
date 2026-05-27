@@ -111,7 +111,7 @@ Java_org_thorvg_core_lottie_LottieNativeBindings_nResizeGlLottie(JNIEnv* env, jc
 
 extern "C" void
 Java_org_thorvg_core_lottie_LottieNativeBindings_nDrawSwLottieFrame(JNIEnv* env, jclass clazz,
-        jlong lottie_ptr, jobject bitmap, jint frame) {
+        jlong lottie_ptr, jobject bitmap, jfloat frame) {
     if (lottie_ptr == 0) {
         return;
     }
@@ -126,7 +126,7 @@ Java_org_thorvg_core_lottie_LottieNativeBindings_nDrawSwLottieFrame(JNIEnv* env,
 
 extern "C" void
 Java_org_thorvg_core_lottie_LottieNativeBindings_nDrawGlLottieFrame(JNIEnv* env, jclass clazz,
-        jlong lottie_ptr, jint frame) {
+        jlong lottie_ptr, jfloat frame) {
     if (lottie_ptr == 0) {
         return;
     }

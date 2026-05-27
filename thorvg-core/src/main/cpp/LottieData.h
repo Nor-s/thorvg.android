@@ -38,7 +38,7 @@ namespace LottieDrawable {
     public:
         Data(const char* content, uint32_t strLength);
         virtual ~Data();
-        void draw(uint32_t frame);
+        void draw(float frame);
 
         tvg::Animation* mAnimation = nullptr;
 

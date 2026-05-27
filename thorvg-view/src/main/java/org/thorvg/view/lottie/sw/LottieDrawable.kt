@@ -32,6 +32,7 @@ import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.RawRes
 import androidx.annotation.FloatRange
 import org.thorvg.core.lottie.LottieConstants
@@ -53,10 +54,12 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
     private var isStarted = false
     private var repeated = 0
 
-    /** Frame index that the next [draw] will render. Incremented after each render. */
+    /** Integer frame index "anchor" — the start of the current interval. */
     private var frame = 0
     /** Frame index that was actually drawn last. Exposed via [currentFrame]. */
     private var displayedFrame = 0
+    /** Wall clock time when the current integer-frame interval started. */
+    private var anchorMs = 0L
 
     private val handler = Handler(Looper.getMainLooper())
     private val nextFrameRunnable = Runnable { invalidateSelf() }
@@ -86,54 +89,64 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
     }
 
     override fun draw(canvas: Canvas) {
-        if (lottieState.valid() && isRunning) {
-            if (!isStarted) {
-                isStarted = true
-                dispatchAnimationStart()
-            }
+        if (!(lottieState.valid() && isRunning)) return
 
-            val startTime = System.nanoTime()
-
-            getFrame(frame)?.let { bitmap ->
-                canvas.drawBitmap(bitmap, 0f, 0f, tmpPaint)
-            }
-            displayedFrame = frame
-
-            if (lottieState.repeatCount != INFINITE && repeated == lottieState.repeatCount) {
-                if (!isEnded) {
-                    isEnded = true
-                    dispatchAnimationEnd()
-                }
-            } else {
-                var resetFrame = false
-                frame += lottieState.framesPerUpdate
-                if (frame > lottieState.lastFrame) {
-                    frame = lottieState.firstFrame
-                    resetFrame = true
-                } else if (frame < lottieState.firstFrame) {
-                    frame = lottieState.lastFrame
-                    resetFrame = true
-                }
-                if (resetFrame) {
-                    repeated++
-                    dispatchAnimationRepeat()
-                }
-            }
-
-            val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
-            handler.postDelayed(
-                nextFrameRunnable,
-                (lottieState.frameInterval - elapsedMs).coerceAtLeast(0L)
-            )
+        if (!isStarted) {
+            isStarted = true
+            dispatchAnimationStart()
         }
+
+        val nowMs = SystemClock.uptimeMillis()
+        if (anchorMs == 0L) anchorMs = nowMs
+
+        val interval = lottieState.frameInterval
+        val direction = lottieState.framesPerUpdate
+        val elapsed = (nowMs - anchorMs).coerceAtLeast(0L)
+        val fractionalFrames = if (interval > 0L) elapsed.toFloat() / interval else 0f
+        val actualFrame = frame.toFloat() + fractionalFrames * direction
+
+        getFrame(actualFrame)?.let { bitmap ->
+            canvas.drawBitmap(bitmap, 0f, 0f, tmpPaint)
+        }
+        displayedFrame = frame
+
+        if (lottieState.repeatCount != INFINITE && repeated == lottieState.repeatCount) {
+            if (!isEnded) {
+                isEnded = true
+                dispatchAnimationEnd()
+            }
+            return
+        }
+
+        // Advance the integer anchor when whole intervals have elapsed.
+        val steps = if (interval > 0L) (elapsed / interval).toInt() else 0
+        if (steps > 0) {
+            anchorMs += steps * interval
+            val cycleSize = (lottieState.lastFrame - lottieState.firstFrame + 1).coerceAtLeast(1)
+            val offset = if (direction > 0) frame - lottieState.firstFrame
+                         else lottieState.lastFrame - frame
+            val advanced = offset.toLong() + steps.toLong()
+            val wraps = (advanced / cycleSize).toInt()
+            val nextOffset = (advanced % cycleSize).toInt()
+            frame = if (direction > 0) lottieState.firstFrame + nextOffset
+                    else lottieState.lastFrame - nextOffset
+            if (wraps > 0) {
+                repeated += wraps
+                dispatchAnimationRepeat()
+            }
+        }
+
+        // Schedule the next vsync redraw (no throttle — sub-frame interpolation).
+        handler.post(nextFrameRunnable)
     }
 
     /**
      * Returns the bitmap containing the requested frame.
      *
      * The returned bitmap is owned by this drawable and may be reused on the next frame render.
+     * Accepts fractional values for sub-frame interpolation.
      */
-    fun getFrame(frame: Int): Bitmap? {
+    fun getFrame(frame: Float): Bitmap? {
         return lottieState.renderFrame(frame)
     }
 
@@ -253,6 +266,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
         isStarted = false
         repeated = 0
         frame = lottieState.firstFrame
+        anchorMs = 0L
         invalidateSelf()
     }
 
@@ -261,6 +275,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
      */
     override fun stop() {
         isRunning = false
+        anchorMs = 0L
         handler.removeCallbacks(nextFrameRunnable)
     }
 
@@ -269,6 +284,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
      */
     fun pause() {
         isRunning = false
+        anchorMs = 0L
         handler.removeCallbacks(nextFrameRunnable)
     }
 
@@ -277,6 +293,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
      */
     fun resume() {
         isRunning = true
+        anchorMs = 0L
         invalidateSelf()
     }
 
@@ -418,7 +435,7 @@ class LottieDrawable internal constructor() : ThorVGDrawable(), Animatable {
             renderState.setSize(width, height)
         }
 
-        fun renderFrame(frame: Int): Bitmap? {
+        fun renderFrame(frame: Float): Bitmap? {
             return renderState.renderFrame(frame)
         }
 

@@ -129,8 +129,9 @@ class LottieSwComposition(jsonContent: String) :
 
     /**
      * Renders the requested frame into the current backing bitmap.
+     * Accepts fractional values for sub-frame interpolation.
      */
-    fun renderFrame(frame: Int): Bitmap? {
+    fun renderFrame(frame: Float): Bitmap? {
         buffer?.let {
             LottieNativeBindings.nDrawSwLottieFrame(nativePtr, it, frame)
         }
@@ -215,8 +216,9 @@ class LottieGlComposition(jsonContent: String) :
 
     /**
      * Renders the requested frame into the bound GL framebuffer.
+     * Accepts fractional values for sub-frame interpolation.
      */
-    fun renderFrame(frame: Int): Boolean {
+    fun renderFrame(frame: Float): Boolean {
         if (!isValid()) return false
         LottieNativeBindings.nDrawGlLottieFrame(nativePtr, frame)
         return true
@@ -357,8 +359,9 @@ sealed class LottieRenderState<C : LottieComposition> {
 class LottieSwRenderState : LottieRenderState<LottieSwComposition>() {
     /**
      * Renders the requested frame into the composition's backing bitmap.
+     * Accepts fractional values for sub-frame interpolation.
      */
-    fun renderFrame(frame: Int): Bitmap? = composition?.renderFrame(frame)
+    fun renderFrame(frame: Float): Bitmap? = composition?.renderFrame(frame)
 
     companion object {
         /**
@@ -387,8 +390,9 @@ class LottieGlRenderState : LottieRenderState<LottieGlComposition>() {
 
     /**
      * Renders the requested frame into the bound GL framebuffer.
+     * Accepts fractional values for sub-frame interpolation.
      */
-    fun renderFrame(frame: Int): Boolean = composition?.renderFrame(frame) == true
+    fun renderFrame(frame: Float): Boolean = composition?.renderFrame(frame) == true
 
     companion object {
         /**

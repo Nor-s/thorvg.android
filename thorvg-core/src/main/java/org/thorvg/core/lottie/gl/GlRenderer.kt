@@ -68,6 +68,8 @@ class GlRenderer(
     private var dirtyFrame = false
     private var targetDirty = true
     private var lastDrawTimeMs = 0L
+    /** Time when the current integer-frame interval started. Used to derive sub-frame offset. */
+    private var intervalAnchorMs = 0L
 
     @Volatile
     var isRunning = false
@@ -162,6 +164,7 @@ class GlRenderer(
             dirtyFrame = false
             targetDirty = true
             lastDrawTimeMs = 0L
+            intervalAnchorMs = 0L
             currentFrame = renderState.firstFrame
             nextFrame = renderState.firstFrame
 
@@ -208,6 +211,7 @@ class GlRenderer(
             nextFrame = renderState.firstFrame
             dirtyFrame = true
             lastDrawTimeMs = 0L
+            intervalAnchorMs = 0L
             sharedGl.requestRender()
         }
     }
@@ -216,6 +220,7 @@ class GlRenderer(
         post {
             isRunning = false
             lastDrawTimeMs = 0L
+            intervalAnchorMs = 0L
         }
     }
 
@@ -240,22 +245,10 @@ class GlRenderer(
         return dirtyFrame || isRunning
     }
 
-    override fun shouldRender(): Boolean {
-        if (!isActive()) return false
-        if (dirtyFrame) return true
-        if (!isRunning) return false
-        return hasFrameIntervalElapsed()
-    }
+    override fun shouldRender(): Boolean = isActive()
 
     override fun onRenderFrame(): Boolean {
         return drawFrame()
-    }
-
-    private fun hasFrameIntervalElapsed(): Boolean {
-        val interval = renderState.frameInterval
-        if (interval <= 0L) return false
-        if (lastDrawTimeMs <= 0L) return true
-        return SystemClock.uptimeMillis() - lastDrawTimeMs >= interval
     }
 
     private fun startInternal() {
@@ -267,6 +260,7 @@ class GlRenderer(
         nextFrame = renderState.firstFrame
         dirtyFrame = true
         lastDrawTimeMs = 0L
+        intervalAnchorMs = 0L
         sharedGl.requestRender()
     }
 
@@ -306,7 +300,7 @@ class GlRenderer(
         val timing = currentFrameTiming()
         if (!timing.shouldDraw) return false
         if (!prepareFrameTarget()) return false
-        if (!renderCurrentFrame()) return false
+        if (!renderCurrentFrame(timing)) return false
 
         finishFrame(timing)
         return true
@@ -315,13 +309,15 @@ class GlRenderer(
     private fun currentFrameTiming(): FrameTiming {
         val nowMs = SystemClock.uptimeMillis()
         val interval = renderState.frameInterval
-        val elapsedMs = if (lastDrawTimeMs > 0L) nowMs - lastDrawTimeMs else interval
+        // On the very first render after start/resume, anchor isn't set yet — treat
+        // elapsed as 0 (no advance). Subsequent renders measure from the anchor.
+        val elapsedMs = if (intervalAnchorMs > 0L) (nowMs - intervalAnchorMs).coerceAtLeast(0L) else 0L
         val steps = if (interval > 0L && elapsedMs >= interval) (elapsedMs / interval).toInt() else 0
         return FrameTiming(
             nowMs = nowMs,
             interval = interval,
             steps = steps,
-            shouldDraw = dirtyFrame || (isRunning && steps > 0)
+            shouldDraw = isActive()
         )
     }
 
@@ -341,12 +337,13 @@ class GlRenderer(
         return targetDirty || sharedGl.lastRenderedClient != this
     }
 
-    private fun renderCurrentFrame(): Boolean {
+    private fun renderCurrentFrame(timing: FrameTiming): Boolean {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClearColor(0f, 0f, 0f, 0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        if (!renderState.renderFrame(nextFrame)) {
+        val actualFrame = computeRenderFrame(timing)
+        if (!renderState.renderFrame(actualFrame)) {
             notifyRenderFailure()
             return false
         }
@@ -356,6 +353,20 @@ class GlRenderer(
         }
         currentFrame = nextFrame
         return true
+    }
+
+    /**
+     * Returns the fractional frame to actually draw this vsync — integer [nextFrame]
+     * plus an offset proportional to time elapsed within the current interval.
+     */
+    private fun computeRenderFrame(timing: FrameTiming): Float {
+        if (!isRunning || timing.interval <= 0L || intervalAnchorMs <= 0L) {
+            return nextFrame.toFloat()
+        }
+        val elapsedFromAnchor = (timing.nowMs - intervalAnchorMs).coerceAtLeast(0L)
+        val fractionalFrames = elapsedFromAnchor.toFloat() / timing.interval
+        val direction = renderState.framesPerUpdate.toFloat()
+        return nextFrame.toFloat() + fractionalFrames * direction
     }
 
     private fun finishFrame(timing: FrameTiming) {
@@ -370,12 +381,14 @@ class GlRenderer(
             mainHandler.post { onAnimationStart() }
         }
 
-        // Preserve leftover fractional frame time to avoid playback drift.
-        lastDrawTimeMs = if (lastDrawTimeMs > 0L && timing.steps > 0) {
-            lastDrawTimeMs + timing.steps * timing.interval
-        } else {
-            timing.nowMs
+        // Anchor management: set on first render after start, advance by whole
+        // intervals when [advanceFrame] steps the integer position forward.
+        if (intervalAnchorMs <= 0L) {
+            intervalAnchorMs = timing.nowMs
+        } else if (timing.steps > 0 && timing.interval > 0L) {
+            intervalAnchorMs += timing.steps * timing.interval
         }
+        lastDrawTimeMs = timing.nowMs
         advanceFrame(timing.steps)
     }
 
