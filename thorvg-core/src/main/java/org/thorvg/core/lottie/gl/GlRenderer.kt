@@ -51,10 +51,9 @@ class GlRenderer(
     private val onAnimationRepeat: () -> Unit = {},
     private val onRenderFailure: () -> Unit = {}
 ) : SharedGlThread.RenderClient {
-    private val sharedGl = SharedGlThread.instance
+    private val sharedGl = SharedGlThread.acquire()
     private val handler = sharedGl.handler
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val renderTarget = GlRenderTarget()
 
     private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var compositionFactory: (() -> LottieGlComposition?)? = null
@@ -74,9 +73,13 @@ class GlRenderer(
     var isRunning = false
         private set
 
+    /** Last frame index that was actually rendered to screen. Exposed for UI binding. */
     @Volatile
     var currentFrame = 0
         private set
+
+    /** Frame index that the next [renderCurrentFrame] will draw. Updated by [advanceFrame]. */
+    private var nextFrame = 0
 
     fun setSurface(surface: SurfaceTexture, width: Int, height: Int) {
         post {
@@ -88,6 +91,12 @@ class GlRenderer(
             if (eglSurface == EGL14.EGL_NO_SURFACE) {
                 notifyRenderFailure()
                 return@post
+            }
+            // Disable vsync: eglSwapBuffers becomes non-blocking. The Choreographer
+            // still rate-limits the loop trigger, but each swap won't wait for the
+            // next refresh, freeing the GL thread to start the next frame immediately.
+            if (sharedGl.makeCurrent(eglSurface)) {
+                EGL14.eglSwapInterval(sharedGl.eglDisplay, 0)
             }
 
             this.width = width
@@ -154,6 +163,7 @@ class GlRenderer(
             targetDirty = true
             lastDrawTimeMs = 0L
             currentFrame = renderState.firstFrame
+            nextFrame = renderState.firstFrame
 
             if (!ensureComposition()) {
                 notifyRenderFailure()
@@ -176,7 +186,9 @@ class GlRenderer(
     fun setConfig(state: LottieGlRenderState) {
         post {
             state.copyPlaybackTo(renderState)
-            currentFrame = currentFrame.coerceIn(renderState.firstFrame, lastFrame())
+            val range = renderState.firstFrame..lastFrame()
+            currentFrame = currentFrame.coerceIn(range)
+            nextFrame = nextFrame.coerceIn(range)
             dirtyFrame = true
             sharedGl.requestRender()
         }
@@ -193,6 +205,7 @@ class GlRenderer(
             ended = false
             repeated = 0
             currentFrame = renderState.firstFrame
+            nextFrame = renderState.firstFrame
             dirtyFrame = true
             lastDrawTimeMs = 0L
             sharedGl.requestRender()
@@ -222,13 +235,27 @@ class GlRenderer(
         mainHandler.removeCallbacksAndMessages(null)
     }
 
-    override fun shouldRender(): Boolean {
+    override fun isActive(): Boolean {
         if (!surfaceReady || failed || renderState.composition == null) return false
         return dirtyFrame || isRunning
     }
 
+    override fun shouldRender(): Boolean {
+        if (!isActive()) return false
+        if (dirtyFrame) return true
+        if (!isRunning) return false
+        return hasFrameIntervalElapsed()
+    }
+
     override fun onRenderFrame(): Boolean {
         return drawFrame()
+    }
+
+    private fun hasFrameIntervalElapsed(): Boolean {
+        val interval = renderState.frameInterval
+        if (interval <= 0L) return false
+        if (lastDrawTimeMs <= 0L) return true
+        return SystemClock.uptimeMillis() - lastDrawTimeMs >= interval
     }
 
     private fun startInternal() {
@@ -237,6 +264,7 @@ class GlRenderer(
         ended = false
         repeated = 0
         currentFrame = renderState.firstFrame
+        nextFrame = renderState.firstFrame
         dirtyFrame = true
         lastDrawTimeMs = 0L
         sharedGl.requestRender()
@@ -256,13 +284,14 @@ class GlRenderer(
         if (renderState.composition == null) return true
         if (!surfaceReady || width <= 0 || height <= 0) return true
         if (ensureCurrent && !sharedGl.makeCurrent(eglSurface)) return false
-        if (!renderTarget.ensure(width, height)) return false
 
+        // FBO id 0 = the EGL window surface's default framebuffer; ThorVG draws
+        // straight to it, no intermediate FBO + blit step.
         val target = LottieRenderTarget.Gl(
             display = sharedGl.eglDisplay.nativeHandle,
             surface = eglSurface.nativeHandle,
             context = sharedGl.eglContext.nativeHandle,
-            framebufferId = renderTarget.framebufferId
+            framebufferId = 0
         )
         renderState.setSize(width, height)
         if (!renderState.target(target)) return false
@@ -309,25 +338,23 @@ class GlRenderer(
     }
 
     private fun needsTargetBind(): Boolean {
-        return targetDirty ||
-            renderTarget.framebufferId == 0 ||
-            sharedGl.lastRenderedClient != this
+        return targetDirty || sharedGl.lastRenderedClient != this
     }
 
     private fun renderCurrentFrame(): Boolean {
-        renderTarget.bind()
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClearColor(0f, 0f, 0f, 0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        if (!renderState.renderFrame(currentFrame)) {
+        if (!renderState.renderFrame(nextFrame)) {
             notifyRenderFailure()
             return false
         }
-        renderTarget.blitToDefaultFramebuffer(width, height)
         if (!sharedGl.swapBuffers(eglSurface)) {
             notifyRenderFailure()
             return false
         }
+        currentFrame = nextFrame
         return true
     }
 
@@ -353,45 +380,52 @@ class GlRenderer(
     }
 
     private fun advanceFrame(steps: Int) {
-        if (steps <= 0) return
-        if (reachedRepeatLimit()) {
-            if (!ended) {
-                ended = true
-                isRunning = false
-                mainHandler.post { onAnimationEnd() }
-            }
-            return
-        }
+        if (steps <= 0 || ended) return
 
         val first = renderState.firstFrame
         val last = lastFrame()
         val frameCount = last - first + 1
+        if (frameCount <= 0) return
+
         val movingForward = renderState.framesPerUpdate > 0
-        val offset = if (movingForward) currentFrame - first else last - currentFrame
-        val advanced = offset.toLong() + steps.toLong()
-        val wraps = (advanced / frameCount).toInt()
-        val resets = if (renderState.repeatCount == LottieConstants.INFINITE) {
-            wraps
-        } else {
-            min(wraps, renderState.repeatCount - repeated)
+        val terminal = if (movingForward) last else first
+        val isInfinite = renderState.repeatCount == LottieConstants.INFINITE
+
+        // SW-parity end: the terminal frame of the final play has just been rendered.
+        if (!isInfinite &&
+            repeated >= renderState.repeatCount &&
+            currentFrame == terminal
+        ) {
+            ended = true
+            isRunning = false
+            mainHandler.post { onAnimationEnd() }
+            return
         }
 
-        currentFrame = if (reachedRepeatLimit(resets)) {
-            if (movingForward) first else last
+        val offset = if (movingForward) currentFrame - first else last - currentFrame
+        val advanced = offset.toLong() + steps.toLong()
+        val rawWraps = (advanced / frameCount).toInt()
+
+        val wraps = if (isInfinite) {
+            rawWraps
+        } else {
+            min(rawWraps, renderState.repeatCount - repeated)
+        }
+        // If steps would carry us past the final play, park at the terminal so the
+        // next render shows it and the following advanceFrame fires onAnimationEnd.
+        val overshoot = !isInfinite && (repeated + rawWraps) > renderState.repeatCount
+
+        nextFrame = if (overshoot) {
+            terminal
         } else {
             val nextOffset = (advanced % frameCount).toInt()
             if (movingForward) first + nextOffset else last - nextOffset
         }
 
-        if (resets > 0) {
-            repeated += resets
+        if (wraps > 0) {
+            repeated += wraps
             mainHandler.post { onAnimationRepeat() }
         }
-    }
-
-    private fun reachedRepeatLimit(pendingResets: Int = 0): Boolean {
-        return renderState.repeatCount != LottieConstants.INFINITE &&
-            repeated + pendingResets >= renderState.repeatCount
     }
 
     private fun lastFrame(): Int {
@@ -416,7 +450,6 @@ class GlRenderer(
         if (!sharedGl.makeCurrent(eglSurface)) {
             sharedGl.makeDefaultCurrent()
         }
-        renderTarget.release()
         if (releaseComposition) {
             renderState.release()
         }

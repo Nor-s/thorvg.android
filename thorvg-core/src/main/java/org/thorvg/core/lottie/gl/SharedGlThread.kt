@@ -24,7 +24,6 @@ package org.thorvg.core.lottie.gl
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
-import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
@@ -33,26 +32,29 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Choreographer
 import androidx.annotation.RestrictTo
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Singleton shared GL thread that owns a single EGL context.
- * All rendering clients (TextureView and HardwareBuffer paths) render
- * sequentially on this thread, avoiding ThorVG's thread-safety issues.
+ * A single GL worker — one [HandlerThread] + one [EGLContext] (shared with [GlEnv.rootContext])
+ * + its own [Choreographer]. Multiple workers are created by [acquire] to form a pool so that
+ * GL render work for different Lottie instances can run in parallel on multi-core devices
+ * without giving up GL resource sharing.
  *
- * Reference:
- * https://github.com/LottieFiles/dotlottie-android/blob/0.13.7/dotlottie/src/main/java/com/lottiefiles/dotlottie/core/util/SharedGlThread.kt
+ * Workers themselves still serialize their own clients (each worker has one EGL context that
+ * can only be current on its thread), so the win is across-worker parallelism: with N workers
+ * and N+ clients, the effective single-vsync render budget multiplies by N.
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-class SharedGlThread private constructor() {
-    private val thread = HandlerThread("ThorVG-Lottie-SharedGL").also { it.start() }
+class SharedGlThread private constructor(name: String) {
+    private val thread = HandlerThread(name).also { it.start() }
     val handler = Handler(thread.looper)
 
-    var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
-        private set
+    val eglDisplay: EGLDisplay
+        get() = GlEnv.display
+
     var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
         private set
 
-    private var eglConfig: EGLConfig? = null
     private var eglPbuffer: EGLSurface = EGL14.EGL_NO_SURFACE
     private val clients = mutableListOf<RenderClient>()
     private var choreographer: Choreographer? = null
@@ -66,7 +68,13 @@ class SharedGlThread private constructor() {
         get() = clients.size
 
     interface RenderClient {
-        /** Whether this client needs rendering. Checked each frame. */
+        /**
+         * Whether this client should keep being polled by the shared thread.
+         * Stays true across vsyncs the client chooses to skip; only flips false
+         * when the client is fully idle (paused, no surface, etc.).
+         */
+        fun isActive(): Boolean
+        /** Whether this client wants to render in the current choreographer frame. */
         fun shouldRender(): Boolean
         /** Called on the shared GL thread during each choreographer frame. */
         fun onRenderFrame(): Boolean
@@ -80,9 +88,11 @@ class SharedGlThread private constructor() {
     }
 
     fun createWindowSurface(surface: SurfaceTexture): EGLSurface {
-        val config = eglConfig ?: return EGL14.EGL_NO_SURFACE
+        val display = GlEnv.display
+        val config = GlEnv.config ?: return EGL14.EGL_NO_SURFACE
+        if (display == EGL14.EGL_NO_DISPLAY) return EGL14.EGL_NO_SURFACE
         val eglSurface = EGL14.eglCreateWindowSurface(
-            eglDisplay,
+            display,
             config,
             surface,
             intArrayOf(EGL14.EGL_NONE),
@@ -95,27 +105,30 @@ class SharedGlThread private constructor() {
     }
 
     fun destroyWindowSurface(surface: EGLSurface) {
-        if (eglDisplay != EGL14.EGL_NO_DISPLAY && surface != EGL14.EGL_NO_SURFACE) {
-            EGL14.eglDestroySurface(eglDisplay, surface)
+        val display = GlEnv.display
+        if (display != EGL14.EGL_NO_DISPLAY && surface != EGL14.EGL_NO_SURFACE) {
+            EGL14.eglDestroySurface(display, surface)
         }
     }
 
     fun makeCurrent(surface: EGLSurface): Boolean {
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY ||
+        val display = GlEnv.display
+        if (display == EGL14.EGL_NO_DISPLAY ||
             eglContext == EGL14.EGL_NO_CONTEXT ||
             surface == EGL14.EGL_NO_SURFACE
         ) {
             return false
         }
-        return EGL14.eglMakeCurrent(eglDisplay, surface, surface, eglContext)
+        return EGL14.eglMakeCurrent(display, surface, surface, eglContext)
     }
 
     /** Make the internal PBuffer surface current. For clients that render to FBOs only. */
     fun makeDefaultCurrent(): Boolean = makeCurrent(eglPbuffer)
 
     fun swapBuffers(surface: EGLSurface): Boolean {
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY || surface == EGL14.EGL_NO_SURFACE) return false
-        return EGL14.eglSwapBuffers(eglDisplay, surface)
+        val display = GlEnv.display
+        if (display == EGL14.EGL_NO_DISPLAY || surface == EGL14.EGL_NO_SURFACE) return false
+        return EGL14.eglSwapBuffers(display, surface)
     }
 
     fun register(client: RenderClient) {
@@ -148,17 +161,15 @@ class SharedGlThread private constructor() {
         override fun doFrame(frameTimeNanos: Long) {
             if (!choreographerRunning) return
 
-            var anyActive = false
             for (client in clients.toList()) {
                 if (client.shouldRender()) {
-                    anyActive = true
                     if (client.onRenderFrame()) {
                         lastRenderedClient = client
                     }
                 }
             }
 
-            if (anyActive || clients.any { it.shouldRender() }) {
+            if (clients.any { it.isActive() }) {
                 choreographer?.postFrameCallback(this)
             } else {
                 choreographerRunning = false
@@ -167,7 +178,7 @@ class SharedGlThread private constructor() {
     }
 
     private fun startChoreographerIfNeeded() {
-        if (!choreographerRunning && clients.any { it.shouldRender() }) {
+        if (!choreographerRunning && clients.any { it.isActive() }) {
             choreographerRunning = true
             choreographer?.postFrameCallback(frameCallback)
         }
@@ -179,55 +190,27 @@ class SharedGlThread private constructor() {
     }
 
     private fun initEgl() {
-        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
-            Log.w(TAG, "eglGetDisplay failed")
-            return
-        }
+        if (!GlEnv.ensureInitialized()) return
 
-        val version = IntArray(2)
-        if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
-            Log.w(TAG, "eglInitialize failed")
-            return
-        }
+        val display = GlEnv.display
+        val config = GlEnv.config ?: return
+        val shareContext = GlEnv.rootContext
+        val contextAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE)
 
-        val configs = arrayOfNulls<EGLConfig>(1)
-        val count = IntArray(1)
-        val attributes = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_DEPTH_SIZE, 0,
-            EGL14.EGL_STENCIL_SIZE, 0,
-            EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
-            EGL14.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
-            EGL14.EGL_NONE
-        )
-        if (!EGL14.eglChooseConfig(eglDisplay, attributes, 0, configs, 0, 1, count, 0) ||
-            count[0] == 0 ||
-            configs[0] == null
-        ) {
-            Log.w(TAG, "eglChooseConfig failed")
-            return
-        }
-        eglConfig = configs[0]
-
-        eglContext = EGL14.eglCreateContext(
-            eglDisplay,
-            eglConfig,
-            EGL14.EGL_NO_CONTEXT,
-            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE),
-            0
-        )
+        eglContext = EGL14.eglCreateContext(display, config, shareContext, contextAttribs, 0)
         if (eglContext == EGL14.EGL_NO_CONTEXT) {
-            Log.w(TAG, "eglCreateContext failed: 0x${Integer.toHexString(EGL14.eglGetError())}")
-            return
+            // Some drivers reject share contexts in obscure modes — try standalone.
+            Log.w(TAG, "shared eglCreateContext failed: 0x${Integer.toHexString(EGL14.eglGetError())}; retrying without share")
+            eglContext = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+            if (eglContext == EGL14.EGL_NO_CONTEXT) {
+                Log.w(TAG, "eglCreateContext failed: 0x${Integer.toHexString(EGL14.eglGetError())}")
+                return
+            }
         }
 
         eglPbuffer = EGL14.eglCreatePbufferSurface(
-            eglDisplay,
-            eglConfig,
+            display,
+            config,
             intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE),
             0
         )
@@ -240,8 +223,36 @@ class SharedGlThread private constructor() {
 
     companion object {
         private const val TAG = "ThorVGSharedGL"
-        private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
 
-        val instance: SharedGlThread by lazy { SharedGlThread() }
+        /**
+         * Number of GL worker threads to create. Defaults to `min(4, cores)` to balance
+         * across-worker parallelism with thread/EGL-context overhead. Must be set before
+         * the first [acquire] call to take effect; later mutations are ignored.
+         */
+        @Volatile
+        var poolSize: Int = defaultPoolSize()
+            set(value) {
+                require(value >= 1) { "poolSize must be >= 1" }
+                field = value
+            }
+
+        private fun defaultPoolSize(): Int =
+            Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+
+        private val workers: Array<SharedGlThread> by lazy {
+            Array(poolSize) { SharedGlThread("ThorVG-Lottie-GL-$it") }
+        }
+
+        private val acquireCounter = AtomicInteger(0)
+
+        /**
+         * Returns one of the pool workers using round-robin distribution. Each [GlRenderer]
+         * should call this once on creation and reuse the result for its lifetime.
+         */
+        fun acquire(): SharedGlThread {
+            val pool = workers
+            val idx = (acquireCounter.getAndIncrement() and Int.MAX_VALUE) % pool.size
+            return pool[idx]
+        }
     }
 }

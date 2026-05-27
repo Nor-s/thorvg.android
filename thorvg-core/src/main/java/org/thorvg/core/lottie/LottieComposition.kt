@@ -46,8 +46,19 @@ sealed class LottieComposition protected constructor(
 
     /**
      * Total frame count reported by the native animation.
+     * Equals `op - ip`; e.g. an animation with frames 0..1 reports 2.
      */
     val frameCount: Int
+
+    /**
+     * Last valid frame index, i.e. `frameCount - 1` (floored at 0).
+     * Use this — not [frameCount] — when clamping playback positions, since
+     * passing [frameCount] itself to the native renderer asks for a frame
+     * past the out-point and ends up holding the last keyframe's value
+     * (effectively rendering an extra "ghost" frame each cycle).
+     */
+    val lastFrameIndex: Int
+        get() = (frameCount - 1).coerceAtLeast(0)
 
     /**
      * Total animation duration in milliseconds.
@@ -307,10 +318,10 @@ sealed class LottieRenderState<C : LottieComposition> {
     }
 
     fun resolvedLastFrame(): Int {
-        val frameCount = (composition?.frameCount ?: firstFrame).coerceAtLeast(firstFrame)
-        return (if (lastFrame > 0) lastFrame else frameCount)
+        val maxIndex = (composition?.lastFrameIndex ?: firstFrame).coerceAtLeast(firstFrame)
+        return (if (lastFrame > 0) lastFrame else maxIndex)
             .coerceAtLeast(firstFrame)
-            .coerceAtMost(frameCount)
+            .coerceAtMost(maxIndex)
     }
 
     fun copyPlaybackTo(target: LottieRenderState<*>) {
@@ -329,7 +340,8 @@ sealed class LottieRenderState<C : LottieComposition> {
 
     protected fun updateFrameInterval() {
         val currentComposition = composition
-        val totalFrames = resolvedLastFrame() - firstFrame
+        // Count of renderable frame slots in the play range (inclusive on both ends).
+        val totalFrames = resolvedLastFrame() - firstFrame + 1
         frameInterval = when {
             currentComposition == null -> 0L
             totalFrames <= 0 -> 0L
